@@ -41,7 +41,7 @@ sub publish_entry {
     }
 
     if ($Net::Twitter::VERSION < '3.00000') {
-	$body = encode_utf8( $body );
+        $body = encode_utf8( $body );
     }
 
     $context->log(info => "Updating Twitter status to '$body'");
