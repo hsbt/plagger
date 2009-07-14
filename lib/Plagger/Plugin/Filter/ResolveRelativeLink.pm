@@ -24,7 +24,7 @@ sub filter {
         return;
     }
 
-    my $resolver = HTML::ResolveLink->new(base => $base);
+    my $resolver = HTML::ResolveLink->new(base => "$base");
     my $html = $resolver->resolve($entry->body);
 
     if (my $count = $resolver->resolved_count) {
