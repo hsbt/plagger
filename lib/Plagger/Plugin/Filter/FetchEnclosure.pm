@@ -42,6 +42,10 @@ sub filter {
         }
 
         my $filename = $enclosure->filename;
+
+        next unless $self->url_whitelisted($enclosure->url);
+        next unless $self->name_whitelisted($filename);
+
         Encode::_utf8_off($filename);
         my $path = File::Spec->catfile($feed_dir, $filename);
         $context->log(info => "fetch " . $enclosure->url . " to " . $path);
@@ -60,6 +64,26 @@ sub filter {
             $enclosure->length( $res->header('Content-Length') );
         }
     }
+}
+
+sub url_whitelisted {
+    my $self = shift;
+    my $url = shift;
+
+    if (my $regex = $self->conf->{enclosure_url_whitelist} ){
+        return unless ($url =~ qr/$regex/);
+    }
+    return 1;
+}
+
+sub name_whitelisted {
+    my $self = shift;
+    my $name = shift;
+
+    if (my $regex = $self->conf->{enclosure_name_whitelist} ){
+        return unless ($name =~ qr/$regex/);
+    }
+    return 1;
 }
 
 1;

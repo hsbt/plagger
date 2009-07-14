@@ -21,6 +21,7 @@ sub plugin_init {
     $self->{ua} = LWP::Parallel::UserAgent->new;
     $self->{ua}->max_hosts( $self->conf->{concurrency} || 10 );
     $self->{ua}->max_req( $self->conf->{max_requests_per_host} || 2 );
+    $self->{ua}->timeout( $self->conf->{timeout} || 180 );
 
     my $conf = Plagger->context->conf->{user_agent};
     if ($conf->{cookies}) {
@@ -38,6 +39,9 @@ sub enqueue {
             $context->log(info => "mkdir $feed_dir");
             mkdir $feed_dir, 0777;
         }
+
+        next unless $self->url_whitelisted($enclosure->url);
+        next unless $self->name_whitelisted($enclosure->filename);
 
         my $path = File::Spec->catfile($feed_dir, $enclosure->filename);
 
