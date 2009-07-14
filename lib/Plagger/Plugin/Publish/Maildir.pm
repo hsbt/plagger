@@ -76,7 +76,7 @@ sub store_entry {
     my $entry      = $args->{entry};
     my $feed_title = $args->{feed}->title->plaintext;
     $feed_title =~ tr/,//d;
-    my $subject = $entry->title->plaintext || '(no-title)';
+    my $subject = eval { $entry->title->plaintext } || '(no-title)';
 
     my @enclosure_cb;
 
