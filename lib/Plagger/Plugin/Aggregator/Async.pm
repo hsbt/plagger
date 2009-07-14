@@ -60,7 +60,7 @@ sub handle_response {
     my $url = $response->request->uri;
 
     if ( $response->code == 304) {
-        $context->log(error => "Not Modified: $url");
+        $context->log(info => "Not Modified: $url");
         return;
     }
     elsif (! $response->is_success) {
