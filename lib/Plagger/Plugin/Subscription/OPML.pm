@@ -41,6 +41,7 @@ sub load_opml {
 
     my $handler = Plagger::Plugin::Subscription::OPML::SAXHandler->new(
         callback => sub { $context->subscription->add(@_) },
+        tags => ($self->conf->{tags} || [] ),
     );
 
     my $parser  = XML::LibXML::SAX->new(Handler => $handler);
@@ -65,7 +66,10 @@ sub start_element {
             $feed->url(_attr($ref, 'xmlUrl'));
             $feed->link(_attr($ref, 'htmlUrl'));
             $feed->title(_attr($ref, 'title', 'text'));
-            $feed->tags([ grep { defined && $_ ne 'Subscriptions' } @{$self->{containers}} ]);
+            $feed->tags([ grep { defined && $_ ne 'Subscriptions' }
+                              @{ $self->{tags} },
+                              @{$self->{containers}}
+                      ]);
             $self->{callback}->($feed);
             $self->{dont_pop}=1;
         } else {
