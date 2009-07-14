@@ -23,25 +23,32 @@ sub register {
 
 sub rule_hook { 'publish.entry' }
 
+sub ensure_folder {
+    my ($context,$maildir,$folder,$permission)=@_;
+
+    my $path = "$maildir/.$folder";
+    $path =~ s/\/\//\//g;
+    $path =~ s/\/$//g;
+    unless (-d $path) {
+        mkdir($path, $permission)
+            or die $context->log(error => "Could not create $path");
+        $context->log(info           => "Create new folder ($path), permission $permission");
+    }
+    unless (-d $path . "/new") {
+        mkdir($path . "/new", $permission)
+            or die $context->log(error => "Could not Create $path/new");
+        $context->log(info           => "Create new folder($path/new)");
+    }
+
+    return $path;
+}
+
 sub initialize {
     my($self, $context, $args) = @_;
     my $cfg = $self->conf;
-    my $permission = $cfg->{permission} || 0700;
+    my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
     if (-d $cfg->{maildir}) {
-        my $path = "$cfg->{maildir}/.$cfg->{folder}";
-        $path =~ s/\/\//\//g;
-        $path =~ s/\/$//g;
-        unless (-d $path) {
-            mkdir($path, 0700)
-              or die $context->log(error => "Could not create $path");
-            $context->log(info           => "Create new folder ($path)");
-        }
-        unless (-d $path . "/new") {
-            mkdir($path . "/new", 0700)
-              or die $context->log(error => "Could not Create $path/new");
-            $context->log(info           => "Create new folder($path/new)");
-        }
-        $self->{path} = $path;
+        $self->{path} = ensure_folder($context, $cfg->{maildir},$cfg->{folder}, $permission);
     }
     else {
         die $context->log(error => "Could not access $cfg->{maildir}");
@@ -70,16 +77,19 @@ sub store_entry {
     my $feed_title = $args->{feed}->title->plaintext;
     $feed_title =~ tr/,//d;
     my $subject = $entry->title->plaintext || '(no-title)';
-    my $body = $self->templatize('mail.tt', $args);
-    $body = encode("utf-8", $body);
-    my $from = $cfg->{mailfrom} || 'plagger@localhost';
-    my $id   = md5_hex($entry->id_safe);
-    my $date = $entry->date || Plagger::Date->now(timezone => $context->conf->{timezone});
+
     my @enclosure_cb;
 
     if ($self->conf->{attach_enclosures}) {
         push @enclosure_cb, $self->prepare_enclosures($entry);
     }
+
+    my $body = $self->templatize('mail.tt', $args);
+    $body = encode("utf-8", $body);
+    my $from = $cfg->{mailfrom} || 'plagger@localhost';
+    my $id   = md5_hex($entry->id_safe);
+    my $date = $entry->date || Plagger::Date->now(timezone => $context->conf->{timezone});
+
     $msg = MIME::Lite->new(
         Date    => $date->format('Mail'),
         From    => encode('MIME-Header', qq("$feed_title" <$from>)),
@@ -99,7 +109,28 @@ sub store_entry {
     $msg->add('X-Tags', encode('MIME-Header', join(' ', @{ $entry->tags })));
     my $xmailer = "Plagger/$Plagger::VERSION";
     $msg->replace('X-Mailer', $xmailer);
-    store_maildir($self, $context, $msg->as_string(), $id);
+
+    my $path=$self->{path};
+    if ($cfg->{use_feed_tags_as_folder} || $cfg->{use_feed_title_as_folder}) {
+        my $folder;
+        if ($cfg->{use_feed_tags_as_folder}) {
+            my @tags = @{ $args->{feed}->tags };
+            s{\W+}{-}g for @tags;
+            $folder = join '.', @tags;
+        }
+        if ($cfg->{use_feed_title_as_folder}) {
+            $folder .= '.' if $folder;
+            my $folder_name=$feed_title;
+            $folder_name =~ s{\W+}{-}g;
+            $folder .= $folder_name;
+        }
+        my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
+        $path=ensure_folder($context,$cfg->{maildir},$folder,$permission);
+    }
+    {
+        local $self->{path} = $path;
+        store_maildir($self, $context, $msg->as_string(), $id);
+    }
     $self->{msg} += 1;
 }
 
