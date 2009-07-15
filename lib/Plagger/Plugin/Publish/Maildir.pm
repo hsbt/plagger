@@ -10,6 +10,8 @@ use HTML::Entities;
 use MIME::Lite;
 use Digest::MD5 qw/ md5_hex /;
 use File::Find;
+my $has_unidecode;
+BEGIN { eval { require Text::Unidecode; $has_unidecode=1 } };
 
 sub register {
     my($self, $context) = @_;
@@ -41,6 +43,17 @@ sub ensure_folder {
     }
 
     return $path;
+}
+
+sub _clean_folder_part {
+    my ($str)=@_;
+
+    if ($has_unidecode) {
+        $str=Text::Unidecode::unidecode($str);
+    }
+    $str =~ s{\W+}{-}g;
+
+    return $str;
 }
 
 sub initialize {
@@ -115,14 +128,11 @@ sub store_entry {
         my $folder;
         if ($cfg->{use_feed_tags_as_folder}) {
             my @tags = @{ $args->{feed}->tags };
-            s{\W+}{-}g for @tags;
-            $folder = join '.', @tags;
+            $folder = join '.', map { _clean_folder_part($_) } @tags;
         }
         if ($cfg->{use_feed_title_as_folder}) {
             $folder .= '.' if $folder;
-            my $folder_name=$feed_title;
-            $folder_name =~ s{\W+}{-}g;
-            $folder .= $folder_name;
+            $folder .= _clean_folder_part($feed_title);
         }
         my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
         $path=ensure_folder($context,$cfg->{maildir},$folder,$permission);
