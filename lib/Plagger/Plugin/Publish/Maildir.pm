@@ -10,8 +10,7 @@ use HTML::Entities;
 use MIME::Lite;
 use Digest::MD5 qw/ md5_hex /;
 use File::Find;
-my $has_unidecode;
-BEGIN { eval { require Text::Unidecode; $has_unidecode=1 } };
+BEGIN { eval { require Encode::IMAPUTF7 } }
 
 sub register {
     my($self, $context) = @_;
@@ -26,11 +25,14 @@ sub register {
 sub rule_hook { 'publish.entry' }
 
 sub ensure_folder {
-    my ($context,$maildir,$folder,$permission)=@_;
+    my ($context,$maildir,$folder,$cfg)=@_;
+
+    my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
 
     my $path = "$maildir/.$folder";
     $path =~ s/\/\//\//g;
     $path =~ s/\/$//g;
+    $path=encode($cfg->{folder_encoding} || 'UTF-8',$path);
     unless (-d $path) {
         mkdir($path, $permission)
             or die $context->log(error => "Could not create $path");
@@ -48,9 +50,6 @@ sub ensure_folder {
 sub _clean_folder_part {
     my ($str)=@_;
 
-    if ($has_unidecode) {
-        $str=Text::Unidecode::unidecode($str);
-    }
     $str =~ s{\W+}{-}g;
 
     return $str;
@@ -59,9 +58,8 @@ sub _clean_folder_part {
 sub initialize {
     my($self, $context, $args) = @_;
     my $cfg = $self->conf;
-    my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
     if (-d $cfg->{maildir}) {
-        $self->{path} = ensure_folder($context, $cfg->{maildir},$cfg->{folder}, $permission);
+        $self->{path} = ensure_folder($context, $cfg->{maildir},$cfg->{folder}, $cfg);
     }
     else {
         die $context->log(error => "Could not access $cfg->{maildir}");
@@ -134,8 +132,7 @@ sub store_entry {
             $folder .= '.' if $folder;
             $folder .= _clean_folder_part($feed_title);
         }
-        my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
-        $path=ensure_folder($context,$cfg->{maildir},$folder,$permission);
+        $path=ensure_folder($context,$cfg->{maildir},$folder,$cfg);
     }
     {
         local $self->{path} = $path;
