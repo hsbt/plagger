@@ -85,8 +85,6 @@ sub store_entry {
     my $cfg = $self->conf;
     my $msg;
     my $entry      = $args->{entry};
-    my $feed_title = $args->{feed}->title->plaintext;
-    $feed_title =~ tr/,//d;
     my $subject = eval { $entry->title->plaintext } || '(no-title)';
 
     my @enclosure_cb;
@@ -100,10 +98,16 @@ sub store_entry {
     my $from = $cfg->{mailfrom} || 'plagger@localhost';
     my $id   = md5_hex($entry->id_safe);
     my $date = $entry->date || Plagger::Date->now(timezone => $context->conf->{timezone});
+    my $from_name;
+    if ($cfg->{use_entry_author_as_from} && $entry->author) {
+    	$from_name=$entry->author->plaintext;
+    }
+    $from_name ||= $args->{feed}->title->plaintext;
+    $from_name =~ tr/,//d;
 
     $msg = MIME::Lite->new(
         Date    => $date->format('Mail'),
-        From    => encode('MIME-Header', qq("$feed_title" <$from>)),
+        From    => encode('MIME-Header', qq("$from_name" <$from>)),
         To      => $cfg->{mailto},
         Subject => encode('MIME-Header', $subject),
         Type    => 'multipart/related',
@@ -130,7 +134,7 @@ sub store_entry {
         }
         if ($cfg->{use_feed_title_as_folder}) {
             $folder .= '.' if $folder;
-            $folder .= _clean_folder_part($feed_title);
+            $folder .= _clean_folder_part($args->{feed}->title->plaintext);
         }
         $path=ensure_folder($context,$cfg->{maildir},$folder,$cfg);
     }
