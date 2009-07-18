@@ -70,7 +70,7 @@ sub store_entry {
     my($self, $context, $args) = @_;
     my $cfg = $self->conf;
 
-    my $msg = $self->prepare_entry($context, $args);
+    my ($msg, $id) = $self->prepare_entry($context, $args);
 
     local $self->{path} = ensure_folder($context,
                                         $cfg->{maildir},

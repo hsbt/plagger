@@ -82,7 +82,7 @@ sub prepare_entry {
     my $xmailer = "Plagger/$Plagger::VERSION";
     $msg->replace('X-Mailer', $xmailer);
 
-    return $msg;
+    return wantarray ? ($msg,$id) : $msg;
 }
 
 sub prepare_enclosures {
