@@ -1,15 +1,9 @@
 package Plagger::Plugin::Publish::Gmail;
 use strict;
-use base qw( Plagger::Plugin );
+use base qw( Plagger::Plugin::Publish::Email );
 
 our $VERSION = '0.10';
 
-use DateTime;
-use DateTime::Format::Mail;
-use Encode;
-use Encode::MIME::Header;
-use HTML::Entities;
-use HTML::Parser;
 use MIME::Lite;
 
 our %TLSConn;
@@ -55,46 +49,9 @@ sub notify {
     my($self, $context, $args) = @_;
 
     return if $args->{feed}->count == 0;
-
-    my $feed = $args->{feed};
-    my $subject = $feed->title || '(no-title)';
-
-    my @enclosure_cb;
-    if ($self->conf->{attach_enclosures}) {
-        for my $entry ($args->{feed}->entries) {
-            push @enclosure_cb, $self->prepare_enclosures($entry);
-        }
-    }
-
-    my $encoding = $self->conf->{encoding} || 'utf-8';
-    my $body = $self->templatize('gmail_notify.tt', { feed => $feed, encoding => $encoding });
-
     my $cfg = $self->conf;
-    $context->log(info => "Sending $subject to $cfg->{mailto}");
 
-    my $feed_title = $feed->title;
-       $feed_title =~ tr/,//d;
-
-    my $now = Plagger::Date->now(timezone => $context->conf->{timezone});
-
-    my $msg = MIME::Lite->new(
-        Date => $now->format('Mail'),
-        From => encode('MIME-Header', qq("$feed_title" <$cfg->{mailfrom}>)),
-        To   => $cfg->{mailto},
-        Subject => encode('MIME-Header', $subject),
-        Type => 'multipart/related',
-    );
-    $msg->replace("X-Mailer" => "Plagger/$Plagger::VERSION");
-
-    $msg->attach(
-        Type => "text/html; charset=$encoding",
-        Data => encode($encoding, $body, Encode::FB_HTMLCREF),
-        Encoding => 'quoted-printable',
-    );
-
-    for my $cb (@enclosure_cb) {
-        $cb->($msg);
-    }
+    my $msg = $self->prepare_entry($context, $args);
 
     my $route = $cfg->{mailroute} || { via => 'smtp', host => 'localhost' };
     $route->{via} ||= 'smtp';
@@ -122,74 +79,6 @@ sub notify {
     if ($@) {
         $context->log(error => "Error while sending emails: $@");
     }
-}
-
-sub prepare_enclosures {
-    my($self, $entry) = @_;
-
-    if (grep $_->is_inline, $entry->enclosures) {
-        # replace inline enclosures to cid: entities
-        my %url2enclosure = map { $_->url => $_ } $entry->enclosures;
-
-        my $output;
-        my $p = HTML::Parser->new(api_version => 3);
-        $p->handler( default => sub { $output .= $_[0] }, "text" );
-        $p->handler( start => sub {
-                         my($tag, $attr, $attrseq, $text) = @_;
-                         # TODO: use HTML::Tagset?
-                         if (my $url = $attr->{src}) {
-                             if (my $enclosure = $url2enclosure{$url}) {
-                                 $attr->{src} = "cid:" . $self->enclosure_id($enclosure);
-                             }
-                             $output .= $self->generate_tag($tag, $attr, $attrseq);
-                         } else {
-                             $output .= $text;
-                         }
-                     }, "tag, attr, attrseq, text");
-        $p->parse($entry->body);
-        $p->eof;
-
-        $entry->body($output);
-    }
-
-    return sub {
-        my $msg = shift;
-
-        for my $enclosure (grep $_->local_path, $entry->enclosures) {
-            if (!-e $enclosure->local_path) {
-                Plagger->context->log(warning => $enclosure->local_path . " doesn't exist. Skip");
-                next;
-            }
-
-            my %param = (
-                Type => $enclosure->type,
-                Path => $enclosure->local_path,
-                Filename => $enclosure->filename,
-            );
-
-            if ($enclosure->is_inline) {
-                $param{Id} = '<' . $self->enclosure_id($enclosure) . '>';
-                $param{Disposition} = 'inline';
-            } else {
-                $param{Disposition} = 'attachment';
-            }
-
-            $msg->attach(%param);
-        }
-    }
-}
-
-sub generate_tag {
-    my($self, $tag, $attr, $attrseq) = @_;
-
-    return "<$tag " .
-        join(' ', map { $_ eq '/' ? '/' : sprintf qq(%s="%s"), $_, encode_entities($attr->{$_}, q(<>"')) } @$attrseq) .
-        '>';
-}
-
-sub enclosure_id {
-    my($self, $enclosure) = @_;
-    return Digest::MD5::md5_hex($enclosure->url->as_string) . '@Plagger';
 }
 
 sub DESTORY {
