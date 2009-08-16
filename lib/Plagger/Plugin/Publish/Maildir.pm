@@ -1,15 +1,10 @@
 package Plagger::Plugin::Publish::Maildir;
 use strict;
-use base qw( Plagger::Plugin );
+use base qw( Plagger::Plugin::Publish::Email );
 
-use DateTime;
-use DateTime::Format::Mail;
 use Encode qw/ from_to encode/;
-use Encode::MIME::Header;
-use HTML::Entities;
-use MIME::Lite;
-use Digest::MD5 qw/ md5_hex /;
 use File::Find;
+BEGIN { eval { require Encode::IMAPUTF7 } }
 
 sub register {
     my($self, $context) = @_;
@@ -23,25 +18,34 @@ sub register {
 
 sub rule_hook { 'publish.entry' }
 
+sub ensure_folder {
+    my ($context,$maildir,$folder,$cfg)=@_;
+
+    my $permission = ( $cfg->{permission} ? oct($cfg->{permission}) : 0700 );
+
+    my $path = "$maildir/.$folder";
+    $path =~ s/\/\//\//g;
+    $path =~ s/\/$//g;
+    $path=encode($cfg->{folder_encoding} || 'IMAP-UTF-7',$path);
+    unless (-d $path) {
+        mkdir($path, $permission)
+            or die $context->log(error => "Could not create $path");
+        $context->log(info           => "Create new folder ($path), permission $permission");
+    }
+    unless (-d $path . "/new") {
+        mkdir($path . "/new", $permission)
+            or die $context->log(error => "Could not Create $path/new");
+        $context->log(info           => "Create new folder($path/new)");
+    }
+
+    return $path;
+}
+
 sub initialize {
     my($self, $context, $args) = @_;
     my $cfg = $self->conf;
-    my $permission = $cfg->{permission} || 0700;
     if (-d $cfg->{maildir}) {
-        my $path = "$cfg->{maildir}/.$cfg->{folder}";
-        $path =~ s/\/\//\//g;
-        $path =~ s/\/$//g;
-        unless (-d $path) {
-            mkdir($path, 0700)
-              or die $context->log(error => "Could not create $path");
-            $context->log(info           => "Create new folder ($path)");
-        }
-        unless (-d $path . "/new") {
-            mkdir($path . "/new", 0700)
-              or die $context->log(error => "Could not Create $path/new");
-            $context->log(info           => "Create new folder($path/new)");
-        }
-        $self->{path} = $path;
+        $self->{path} = ensure_folder($context, $cfg->{maildir},$cfg->{folder}, $cfg);
     }
     else {
         die $context->log(error => "Could not access $cfg->{maildir}");
@@ -65,122 +69,16 @@ sub finalize {
 sub store_entry {
     my($self, $context, $args) = @_;
     my $cfg = $self->conf;
-    my $msg;
-    my $entry      = $args->{entry};
-    my $feed_title = $args->{feed}->title->plaintext;
-    $feed_title =~ tr/,//d;
-    my $subject = $entry->title->plaintext || '(no-title)';
-    my $body = $self->templatize('mail.tt', $args);
-    $body = encode("utf-8", $body);
-    my $from = $cfg->{mailfrom} || 'plagger@localhost';
-    my $id   = md5_hex($entry->id_safe);
-    my $date = $entry->date || Plagger::Date->now(timezone => $context->conf->{timezone});
-    my @enclosure_cb;
 
-    if ($self->conf->{attach_enclosures}) {
-        push @enclosure_cb, $self->prepare_enclosures($entry);
-    }
-    $msg = MIME::Lite->new(
-        Date    => $date->format('Mail'),
-        From    => encode('MIME-Header', qq("$feed_title" <$from>)),
-        To      => $cfg->{mailto},
-        Subject => encode('MIME-Header', $subject),
-        Type    => 'multipart/related',
-    );
-    $msg->attach(
-        Type     => 'text/html; charset=utf-8',
-        Data     => $body,
-        Encoding => 'quoted-printable',
-    );
-    for my $cb (@enclosure_cb) {
-        $cb->($msg);
-    }
-    $msg->add('Message-Id', "<$id.plagger\@localhost>");
-    $msg->add('X-Tags', encode('MIME-Header', join(' ', @{ $entry->tags })));
-    my $xmailer = "Plagger/$Plagger::VERSION";
-    $msg->replace('X-Mailer', $xmailer);
+    my ($msg, $id) = $self->prepare_entry($context, $args);
+
+    local $self->{path} = ensure_folder($context,
+                                        $cfg->{maildir},
+                                        $self->folder_name($context,$args),
+                                        $cfg);
     store_maildir($self, $context, $msg->as_string(), $id);
+
     $self->{msg} += 1;
-}
-
-sub prepare_enclosures {
-    my($self, $entry) = @_;
-
-    if (grep $_->is_inline, $entry->enclosures) {
-
-        # replace inline enclosures to cid: entities
-        my %url2enclosure = map { $_->url => $_ } $entry->enclosures;
-
-        my $output;
-        my $p = HTML::Parser->new(api_version => 3);
-        $p->handler(default => sub { $output .= $_[0] }, "text");
-        $p->handler(
-            start => sub {
-                my($tag, $attr, $attrseq, $text) = @_;
-
-                # TODO: use HTML::Tagset?
-                if (my $url = $attr->{src}) {
-                    if (my $enclosure = $url2enclosure{$url}) {
-                        $attr->{src} = "cid:" . $self->enclosure_id($enclosure);
-                    }
-                    $output .= $self->generate_tag($tag, $attr, $attrseq);
-                }
-                else {
-                    $output .= $text;
-                }
-            },
-            "tag, attr, attrseq, text"
-        );
-        $p->parse($entry->body);
-        $p->eof;
-
-        $entry->body($output);
-    }
-
-    return sub {
-        my $msg = shift;
-
-        for my $enclosure (grep $_->local_path, $entry->enclosures) {
-            if (!-e $enclosure->local_path) {
-                Plagger->context->log(warning => $enclosure->local_path .  " doesn't exist.  Skip");
-                next;
-            }
-
-            my %param = (
-                Type     => $enclosure->type,
-                Path     => $enclosure->local_path,
-                Filename => $enclosure->filename,
-            );
-
-            if ($enclosure->is_inline) {
-                $param{Id} = '<' . $self->enclosure_id($enclosure) . '>';
-                $param{Disposition} = 'inline';
-            }
-            else {
-                $param{Disposition} = 'attachment';
-            }
-
-            $msg->attach(%param);
-        }
-      }
-}
-
-sub generate_tag {
-    my($self, $tag, $attr, $attrseq) = @_;
-
-    return "<$tag " . join(
-        ' ',
-        map {
-            $_ eq '/' ? '/' : sprintf qq(%s="%s"), $_,
-              encode_entities($attr->{$_}, q(<>"'))
-          } @$attrseq
-      )
-      . '>';
-}
-
-sub enclosure_id {
-    my($self, $enclosure) = @_;
-    return Digest::MD5::md5_hex($enclosure->url->as_string) . '@Plagger';
 }
 
 sub store_maildir {

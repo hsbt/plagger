@@ -1,12 +1,8 @@
 package Plagger::Plugin::Publish::IMAP;
 use strict;
-use base qw( Plagger::Plugin );
+use base qw( Plagger::Plugin::Publish::Email );
 
-use DateTime;
-use DateTime::Format::Mail;
 use Encode qw/ from_to encode/;
-use Encode::MIME::Header;
-use MIME::Lite;
 use IO::File;
 use IO::Socket::SSL;
 use Mail::IMAPClient;
@@ -24,6 +20,20 @@ sub register {
 }
 
 sub rule_hook { 'publish.entry' }
+
+sub ensure_folder {
+    my ($self,$context,$folder,$cfg)=@_;
+
+    $folder=encode($cfg->{folder_encoding} || 'IMAP-UTF-7',$folder);
+
+    if ($folder && !$self->{imap}->exists($folder)) {
+        $self->{imap}->create($folder)
+          or die $context->log(error => "Could not create $folder: $@");
+        $context->log(info => "Create new folder ($folder)");
+    }
+
+    return;
+}
 
 sub initialize {
     my($self, $context, $args) = @_;
@@ -47,11 +57,8 @@ sub initialize {
       )
       or die $context->log(error => "Cannot connect; $@");
     $context->log(debug => "Connected IMAP-SERVER (" . $cfg->{host} . ")");
-    if ($cfg->{folder} && !$self->{imap}->exists($cfg->{folder})) {
-        $self->{imap}->create($cfg->{folder})
-          or die $context->log(error => "Could not create $cfg->{folder}: $@");
-        $context->log(info => "Create new folder ($cfg->{folder})");
-    }
+    $self->ensure_folder($context,$cfg->{folder},$cfg);
+
     if (!$cfg->{mailfrom}) {
         $cfg->{mailfrom} = 'plagger';
     }
@@ -70,40 +77,24 @@ sub finalize {
 sub store_entry {
     my($self, $context, $args) = @_;
     my $cfg = $self->conf;
-    my $msg;
-    my $entry      = $args->{entry};
-    my $feed_title = $args->{feed}->title;
-    $feed_title =~ tr/,//d;
-    my $subject = $entry->title || '(no-title)';
-    my $body =
-      $self->templatize('mail.tt',
-        { entry => $args->{entry}, feed => $args->{feed} });
-    my $now = Plagger::Date->now(timezone => $context->conf->{timezone});
-    $msg = MIME::Lite->new(
-        Date    => $now->format('Mail'),
-        From    => encode('MIME-Header', qq("$feed_title" <$cfg->{mailfrom}>)),
-        To      => $cfg->{mailto},
-        Subject => encode('MIME-Header', $subject),
-        Type    => 'multipart/related',
-    );
-    $body = encode("utf-8", $body);
-    $msg->attach(
-        Type     => 'text/html; charset=utf-8',
-        Data     => $body,
-        Encoding => 'quoted-printable',
-    );
-    $msg->add('X-Tags', encode('MIME-Header', join(' ', @{ $entry->tags })));
-    my $xmailer =
-      "MIME::Lite (Publish::Maildir Ver.$self->{version} in plagger)";
-    $msg->replace('X-Mailer', $xmailer);
-    $msg->add('In-Reply-To', "<" . md5_hex($entry->id_safe) . '@localhost>');
-    store_maildir($self, $context, $msg->as_string());
+
+    my $msg = $self->prepare_entry($context, $args);
+
+    my $folder = $self->folder_name($context, $args);
+
+    $self->ensure_folder($context,$folder,$cfg);
+
+    store_imap($self, $context,
+               $msg->as_string(),
+               $folder
+           );
+
     $self->{msg} += 1;
 }
 
-sub store_maildir {
-    my($self, $context, $msg) = @_;
-    my $folder = $self->conf->{folder} || 'INBOX';
+sub store_imap {
+    my($self, $context, $msg, $folder) = @_;
+    $folder ||= 'INBOX';
     my $uid = $self->{imap}->append_string($folder, $msg, $self->conf->{mark})
       or die $context->log(error => "Could not append: $@");
 }

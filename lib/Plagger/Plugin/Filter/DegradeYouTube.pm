@@ -5,7 +5,7 @@ use base qw( Plagger::Plugin );
 use WebService::YouTube;
 
 my $regex = <<'...';
-<object width="\d+" height="\d+".*?><param name="movie" value="(http://www.youtube.com/[^"]+)".*?><param name="wmode" value="transparent".*?>(.*?)</object>
+<object width="\d+" height="\d+".*?><param name="movie" value="(http://www.youtube.com/[^"]+)".*?>(.*?)</object>
 ...
 chomp $regex;
 
