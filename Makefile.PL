@@ -42,6 +42,7 @@ requires('XML::RSS::LibXML', 0.3002);
 requires('Encode', 2.10);
 requires('Term::Encoding');
 requires('File::HomeDir');
+requires('Config::Pit');
 
 build_requires('YAML');
 build_requires('YAML::Loader');
